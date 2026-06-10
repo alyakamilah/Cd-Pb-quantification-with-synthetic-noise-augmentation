@@ -1,0 +1,79 @@
+"""
+statistical_analysis.py
+=======================
+Statistical analysis of the noise-augmentation effect (Section 2.8).
+
+Purpose:
+    Performs one-sample t-tests of the per-seed MAPE_mid values from the
+    main SNR experiment against the clean baseline. Tests are:
+    - One-sided (alternative='less') for Cd2+: H1 says noise reduces MAPE
+    - Two-sided for Pb2+: direction was not preregistered
+
+Reads: results.csv from run_experiment.py
+Writes: augmentation_stats.csv with t-statistics and p-values
+"""
+
+import numpy as np
+import pandas as pd
+from scipy.stats import ttest_1samp
+
+
+RESULTS_CSV = "results.csv"
+OUTPUT_CSV = "augmentation_stats.csv"
+
+NOISE_TYPES = ['gaussian', 'student_t', 'pink', 'hetero']
+TEST_SNR = 30  # focal SNR for augmentation comparison
+
+
+def main():
+    df = pd.read_csv(RESULTS_CSV)
+    df = df.drop_duplicates(
+        subset=['method', 'noise_type', 'snr_db', 'seed', 'metal'])
+
+    # Compute per-metal clean baseline (mean across seeds)
+    baseline = {}
+    for metal in ['Cd', 'Pb']:
+        sub = df[(df['noise_type'] == 'baseline') & (df['metal'] == metal)]
+        baseline[metal] = sub['MAPE_mid'].mean()
+
+    print("Baseline MAPE_mid:")
+    for metal, val in baseline.items():
+        print(f"  {metal}: {val:.2f}%")
+    print()
+
+    # One-sample t-test per (metal, noise_type) at SNR=30
+    rows = []
+    for metal in ['Cd', 'Pb']:
+        alt = 'less' if metal == 'Cd' else 'two-sided'
+        bl = baseline[metal]
+        for noise in NOISE_TYPES:
+            sub = df[(df['noise_type'] == noise) &
+                     (df['snr_db'] == TEST_SNR) &
+                     (df['metal'] == metal)]
+            if len(sub) < 2:
+                continue
+            mapes = sub['MAPE_mid'].values
+            t_stat, p_val = ttest_1samp(mapes, bl, alternative=alt)
+            mean_mape = float(np.mean(mapes))
+            std_mape = float(np.std(mapes, ddof=1))
+            delta_pct = (mean_mape - bl) / bl * 100
+            rows.append({
+                'metal': metal,
+                'noise_type': noise,
+                'mean_MAPE_mid': mean_mape,
+                'std_MAPE_mid': std_mape,
+                'delta_pct': delta_pct,
+                't_statistic': float(t_stat),
+                'p_value': float(p_val),
+                'alternative': alt,
+                'n_seeds': len(sub),
+            })
+
+    out = pd.DataFrame(rows)
+    out.to_csv(OUTPUT_CSV, index=False)
+    print(out.to_string(index=False))
+    print(f"\nSaved {OUTPUT_CSV}.")
+
+
+if __name__ == '__main__':
+    main()
